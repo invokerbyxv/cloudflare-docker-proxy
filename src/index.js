@@ -6,7 +6,7 @@ addEventListener("fetch", (event) => {
 const DOCKER_HUB = "https://registry-1.docker.io";
 
 const routes = {
-  "tarasha.work": DOCKER_HUB
+  "docker.tarasha.work": DOCKER_HUB
 };
 
 async function handleRequest(request) {
