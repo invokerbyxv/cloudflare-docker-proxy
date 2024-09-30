@@ -107,8 +107,6 @@ function getUpstream(host) {
 }
 
 function parseAuthenticate(authenticateStr) {
-  // sample: Bearer realm="https://auth.ipv6.docker.com/token",service="registry.docker.io"
-  // match strings after =" and before "
   const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g;
   const matches = authenticateStr.match(re);
   if (matches == null || matches.length < 2) {
