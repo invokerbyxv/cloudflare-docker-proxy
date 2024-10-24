@@ -6,7 +6,13 @@ addEventListener("fetch", (event) => {
 const DOCKER_HUB = "https://registry-1.docker.io";
 
 const routes = {
-  "docker.tarasha.work": DOCKER_HUB
+  "docker.tarasha.work": DOCKER_HUB,
+  "quay.tarasha.work": "https://quay.io",
+  "gcr.tarasha.work": "https://gcr.io",
+  "k8s-gcr.tarasha.work": "https://k8s.gcr.io",
+  "k8s.tarasha.work": "https://registry.k8s.io",
+  "ghcr.tarasha.work": "https://ghcr.io",
+  "cloudsmith.tarasha.work": "https://docker.cloudsmith.io"
 };
 
 async function handleRequest(request) {
