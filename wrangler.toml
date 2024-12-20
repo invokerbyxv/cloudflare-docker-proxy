@@ -4,6 +4,10 @@ compatibility_date = "2023-12-01"
 [placement]
 mode = "smart"
 
+# wrangler.toml (wrangler v3.88.0^)
+[observability.logs]
+enabled = true
+
 [dev]
 ip = "0.0.0.0"
 port = 8787
