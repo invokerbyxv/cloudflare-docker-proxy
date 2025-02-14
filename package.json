@@ -5,12 +5,12 @@
   "version": "1.0.0",
   "author": "liuweigl <wei2460@qq.com>",
   "devDependencies": {
-    "prettier": "^3.3.3",
-    "wrangler": "^3.77.0"
+    "prettier": "^3.5.1",
+    "wrangler": "^3.109.1"
   },
   "scripts": {
-    "format": "prettier --write '**/*.{js,css,json,md}'",
-    "dev": "wrangler dev src/index.js --env dev"
+    "start": "wrangler dev src/index.js --env dev",
+    "format": "prettier --write '**/*.{js,css,json,md}'"
   },
   "license": "MIT",
   "main": "src/index.js"
