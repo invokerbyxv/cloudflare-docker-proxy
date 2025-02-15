@@ -14,8 +14,8 @@ enabled = true
 
 [dev]
 ip = "0.0.0.0"
-port = 8787
-local_protocol = "http"
+port = 443
+local_protocol = "https"
 
 [env.dev.vars]
 MODE = "debug"

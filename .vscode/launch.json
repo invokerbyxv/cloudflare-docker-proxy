@@ -1,14 +1,15 @@
 {
-    "configurations": [
-      {
-        "name": "Miniflare",
-        "type": "node",
-        "request": "attach",
-        "port": 9229,
-        "cwd": "/",
-        "resolveSourceMapLocations": null,
-        "attachExistingChildren": false,
-        "autoAttachChildProcesses": false,
-      }
-    ]
-  }
+  "configurations": [
+    {
+      "name": "Wrangler",
+      "type": "node",
+      "request": "attach",
+      // 跟 dev 服务端口一致
+      "port": 443,
+      "cwd": "/",
+      "resolveSourceMapLocations": null,
+      "attachExistingChildren": false,
+      "autoAttachChildProcesses": false
+    }
+  ]
+}

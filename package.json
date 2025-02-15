@@ -9,7 +9,7 @@
     "wrangler": "^3.109.1"
   },
   "scripts": {
-    "start": "wrangler dev src/index.js --env dev",
+    "start": "wrangler dev src/index.js --env dev --https-key-path ssl/docker.eastcoal.tech.key --https-cert-path ssl/docker.eastcoal.tech.pem",
     "format": "prettier --write '**/*.{js,css,json,md}'"
   },
   "license": "MIT",
