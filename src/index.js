@@ -1,24 +1,25 @@
-import { decodeBase64, encodeBase64 } from "./base64";
-import { copyResponse } from "./http";
-import { logBlockEnd, logBlockStart, logHttp, } from "./logger";
+import { decodeBase64, encodeBase64 } from "./base64"
+import { copyResponse } from "./http"
+import { logBlockEnd, logBlockStart, logHttp, } from "./logger"
 
 addEventListener("fetch", (event) => {
-  event.passThroughOnException();
-  event.respondWith(handleRequest(event.request));
-});
+  event.passThroughOnException()
+  event.respondWith(handleRequest(event.request))
+})
 
-// "https://registry.cn-shanghai.aliyuncs.com" ||
-const DOCKER_HUB = "https://registry-1.docker.io";
+const TOP_DOMAIN = "eastcoal.tech"
+
+const DOCKER_HUB = "https://registry-1.docker.io"
 
 const routes = {
-  ["docker." + CUSTOM_DOMAIN]: DOCKER_HUB,
-  ["quay." + CUSTOM_DOMAIN]: "https://quay.io",
-  ["gcr." + CUSTOM_DOMAIN]: "https://gcr.io",
-  ["k8s-gcr." + CUSTOM_DOMAIN]: "https://k8s.gcr.io",
-  ["k8s." + CUSTOM_DOMAIN]: "https://registry.k8s.io",
-  ["ghcr." + CUSTOM_DOMAIN]: "https://ghcr.io",
-  ["cloudsmith." + CUSTOM_DOMAIN]: "https://docker.cloudsmith.io",
-};
+  ["docker." + TOP_DOMAIN]: DOCKER_HUB,
+  ["quay." + TOP_DOMAIN]: "https://quay.io",
+  ["gcr." + TOP_DOMAIN]: "https://gcr.io",
+  ["k8s-gcr." + TOP_DOMAIN]: "https://k8s.gcr.io",
+  ["k8s." + TOP_DOMAIN]: "https://registry.k8s.io",
+  ["ghcr." + TOP_DOMAIN]: "https://ghcr.io",
+  ["cloudsmith." + TOP_DOMAIN]: "https://docker.cloudsmith.io",
+}
 
 async function handleRequest(request) {
 
@@ -27,7 +28,7 @@ async function handleRequest(request) {
 }
 
 // 末尾的 / 不能省略，否则 getForwardRealm 会出错
-const AUTHORIZE_PATH = "/auth/";
+const AUTHORIZE_PATH = "/auth/"
 
 class RequestHandler {
   /**
@@ -64,16 +65,16 @@ class RequestHandler {
   static async create(request) {
     const handler = new RequestHandler()
     logBlockStart('RequestHandler block')
-    const requestUrl = new URL(request.url);
+    const requestUrl = new URL(request.url)
     handler.upstream = routes[requestUrl.hostname]
     if (!handler.upstream) {
       throw new Error(`未找到 ${handler.url.hostname} 对应的 upstream 配置项`)
     }
     handler.url = transformUrl(requestUrl, handler.upstream === DOCKER_HUB)
-    handler.method = request.method;
-    handler.headers = new Headers(request.headers);
+    handler.method = request.method
+    handler.headers = new Headers(request.headers)
     handler.headers.delete('host')
-    handler.body = await resolveRequestBody(request);
+    handler.body = await resolveRequestBody(request)
     logHttp('收到请求', request)
     logBlockEnd()
     return handler
@@ -89,50 +90,50 @@ class RequestHandler {
 
   async forwardGenericalRequest() {
     logBlockStart('forwardGenericalRequest')
-    const forwardUrl = new URL(this.upstream + this.url.pathname + this.url.search + this.url.hash);
+    const forwardUrl = new URL(this.upstream + this.url.pathname + this.url.search + this.url.hash)
     const forwardReq = new Request(forwardUrl, {
       method: this.method,
       headers: this.headers,
       body: this.body,
       redirect: "follow",
     })
-    let forwardRes = await fetch(forwardReq);
+    let forwardRes = await fetch(forwardReq)
     // 让客户端根据 Www-Authenticate 头部重新请求
     if (forwardRes.status === 401) {
-      const wwwAuthenticate = parseAuthenticate(forwardRes.headers.get("Www-Authenticate"));
+      const wwwAuthenticate = parseAuthenticate(forwardRes.headers.get("Www-Authenticate"))
       if (wwwAuthenticate) {
-        const realmUrl = new URL(this.url);
+        const realmUrl = new URL(this.url)
         setForwardRealm(realmUrl, wwwAuthenticate.realm)
-        const realmRes = new Response(forwardRes.body, forwardRes);
+        const realmRes = new Response(forwardRes.body, forwardRes)
         realmRes.headers.delete('content-length')
         realmRes.headers.set(
           "Www-Authenticate", `Bearer realm="${realmUrl.toString()}",service="${wwwAuthenticate.service}"`
-        );
-        forwardRes = realmRes;
+        )
+        forwardRes = realmRes
       }
     }
     const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
     await logHttp('执行常规请求', forwardReq, forwardRes1)
     logBlockEnd()
-    return forwardRes2;
+    return forwardRes2
   }
 
   async forwardAuthRequest() {
     logBlockStart('forwardAuthRequest')
     const forwardRealm = getForwardRealm(this.url)
-    const forwardUrl = new URL(forwardRealm);
-    forwardUrl.search = this.url.search;
+    const forwardUrl = new URL(forwardRealm)
+    forwardUrl.search = this.url.search
     const forwardReq = new Request(forwardUrl,
       {
         method: this.method,
         headers: this.headers,
         body: this.body
       })
-    const forwardRes = await fetch(forwardReq);
+    const forwardRes = await fetch(forwardReq)
     const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
     await logHttp('执行授权请求', forwardReq, forwardRes1)
     logBlockEnd()
-    return forwardRes2;
+    return forwardRes2
   }
 }
 
@@ -148,11 +149,11 @@ function transformUrl(url, isDockerHub) {
   if (!isDockerHub) {
     return url
   }
-  const transformedUrl = new URL(url);
-  const pathParts = url.pathname.split("/");
+  const transformedUrl = new URL(url)
+  const pathParts = url.pathname.split("/")
   if (pathParts.length == 5) {
-    pathParts.splice(2, 0, "library");
-    transformedUrl.pathname = pathParts.join("/");
+    pathParts.splice(2, 0, "library")
+    transformedUrl.pathname = pathParts.join("/")
   }
   return transformedUrl
 }
@@ -162,7 +163,7 @@ function transformUrl(url, isDockerHub) {
  * @param {Request} request 
  */
 async function resolveRequestBody(request) {
-  const method = request.method.toUpperCase();
+  const method = request.method.toUpperCase()
   if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
     return await request.arrayBuffer()
   }
@@ -172,15 +173,15 @@ async function resolveRequestBody(request) {
 function parseAuthenticate(authenticateStr) {
   // sample: Bearer realm="https://auth.ipv6.docker.com/token",service="registry.docker.io"
   // match strings after =" and before "
-  const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g;
-  const matches = authenticateStr.match(re);
+  const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g
+  const matches = authenticateStr.match(re)
   if (matches == null || matches.length < 2) {
-    throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`);
+    throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`)
   }
   return {
     realm: matches[0],
     service: matches[1],
-  };
+  }
 }
 
 function isAuthRequest(url) {
