@@ -65,16 +65,11 @@ class RequestHandler {
   static async create(request) {
     const handler = new RequestHandler()
     logBlockStart('RequestHandler block')
-    const requestUrl = new URL(request.url)
-    handler.upstream = routes[requestUrl.hostname]
-    if (!handler.upstream) {
-      throw new Error(`未找到 ${handler.url.hostname} 对应的 upstream 配置项`)
-    }
-    handler.url = transformUrl(requestUrl, handler.upstream === DOCKER_HUB)
-    handler.method = request.method
-    handler.headers = new Headers(request.headers)
-    handler.headers.delete('host')
+    handler.upstream = resolveUpstream(request)
+    handler.url = resolveUrl(request, handler.upstream === DOCKER_HUB)
+    handler.headers = resolveRequestHeaders(request, handler)
     handler.body = await resolveRequestBody(request)
+    handler.method = request.method
     logHttp('收到请求', request)
     logBlockEnd()
     return handler
@@ -138,24 +133,49 @@ class RequestHandler {
 }
 
 /**
+ * 解析上游请求地址
+ * 
+ * @param {Request} request 
+ */
+function resolveUpstream(request) {
+  const requestUrl = new URL(request.url)
+  const upstream = routes[requestUrl.hostname]
+  if (!upstream) {
+    throw new Error(`未找到 ${requestUrl.hostname} 对应的 upstream 配置项`)
+  }
+  return upstream
+}
+
+/**
  * 处理默认的 library 命名空间
  * Example: /v2/busybox/manifests/latest => /v2/library/busybox/manifests/latest
  * 
- * @param {URL} url 
+ * @param {Request} request 
  * @param {boolean} isDockerHub
  * @returns {URL} 
  */
-function transformUrl(url, isDockerHub) {
-  if (!isDockerHub) {
-    return url
-  }
-  const transformedUrl = new URL(url)
-  const pathParts = url.pathname.split("/")
-  if (pathParts.length == 5) {
-    pathParts.splice(2, 0, "library")
-    transformedUrl.pathname = pathParts.join("/")
+function resolveUrl(request, isDockerHub) {
+  const transformedUrl = new URL(request.url)
+  if (isDockerHub) {
+    const pathParts = transformedUrl.pathname.split("/")
+    if (pathParts.length == 5) {
+      pathParts.splice(2, 0, "library")
+      transformedUrl.pathname = pathParts.join("/")
+    }
   }
   return transformedUrl
+}
+
+/**
+ * 解析 request headers 值
+ * @param {Request} request 
+ * @param {RequestHandler} handler
+ */
+function resolveRequestHeaders(request, handler) {
+  const url = new URL(handler.upstream)
+  const headers = new Headers(request.headers)
+  headers.set('Host', url.hostname)
+  return headers
 }
 
 /**
