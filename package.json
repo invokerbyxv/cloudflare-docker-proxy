@@ -4,12 +4,13 @@
   "description": "",
   "version": "1.0.0",
   "author": "liuweigl <wei2460@qq.com>",
+  "type": "module",
   "devDependencies": {
     "prettier": "^3.5.1",
     "wrangler": "^3.109.1"
   },
   "scripts": {
-    "start": "wrangler dev src/index.js --env dev --https-key-path ssl/docker.eastcoal.tech.key --https-cert-path ssl/docker.eastcoal.tech.pem",
+    "start": "wrangler dev src/index.js --https-key-path ssl/docker.eastcoal.tech.key --https-cert-path ssl/docker.eastcoal.tech.pem",
     "format": "prettier --write '**/*.{js,css,json,md}'"
   },
   "license": "MIT",

@@ -1,115 +1,172 @@
+import { decodeBase64, encodeBase64 } from "./base64";
+import { copyResponse } from "./http";
+import { logBlockEnd, logBlockStart, logHttp, } from "./logger";
+
 addEventListener("fetch", (event) => {
   event.passThroughOnException();
   event.respondWith(handleRequest(event.request));
 });
 
+// "https://registry.cn-shanghai.aliyuncs.com" ||
 const DOCKER_HUB = "https://registry-1.docker.io";
 
 const routes = {
-  "docker.eastcoal.tech": DOCKER_HUB,
-  "quay.eastcoal.tech": "https://quay.io",
-  "gcr.eastcoal.tech": "https://gcr.io",
-  "k8s-gcr.eastcoal.tech": "https://k8s.gcr.io",
-  "k8s.eastcoal.tech": "https://registry.k8s.io",
-  "ghcr.eastcoal.tech": "https://ghcr.io",
-  "cloudsmith.eastcoal.tech": "https://docker.cloudsmith.io",
+  ["docker." + CUSTOM_DOMAIN]: DOCKER_HUB,
+  ["quay." + CUSTOM_DOMAIN]: "https://quay.io",
+  ["gcr." + CUSTOM_DOMAIN]: "https://gcr.io",
+  ["k8s-gcr." + CUSTOM_DOMAIN]: "https://k8s.gcr.io",
+  ["k8s." + CUSTOM_DOMAIN]: "https://registry.k8s.io",
+  ["ghcr." + CUSTOM_DOMAIN]: "https://ghcr.io",
+  ["cloudsmith." + CUSTOM_DOMAIN]: "https://docker.cloudsmith.io",
 };
 
 async function handleRequest(request) {
-  const handler = new RequestHandler(request)
-  return handler.start()
+
+  const handler = await RequestHandler.create(request)
+  return handler.route()
 }
 
-const AUTHORIZE_PATH = "/v2/auth";
+// 末尾的 / 不能省略，否则 getForwardRealm 会出错
+const AUTHORIZE_PATH = "/auth/";
 
 class RequestHandler {
-  request;
-  url;
-  upstream;
-  constructor(request) {
-    this.request = request;
-    this.url = new URL(request.url)
-    this.upstream = getUpstream(this.url.hostname)
-    if (!this.upstream) {
-      throw new Error('未找到映射的 upstream 配置项')
-    }
+  /**
+   * @type {string}
+   */
+  upstream
+
+  /**
+   * @type {URL}
+   */
+  url
+
+  /**
+   * @type {string}
+   */
+  method
+
+  /**
+   * @type {Headers}
+   */
+  headers
+
+  /**
+   * @type {ArrayBuffer}
+   */
+  body
+
+  constructor() {
   }
 
-  get isDockerHub() {
-    this.upstream === DOCKER_HUB;
+  /**
+   * @param {Request} request
+   */
+  static async create(request) {
+    const handler = new RequestHandler()
+    logBlockStart('RequestHandler block')
+    const requestUrl = new URL(request.url);
+    handler.upstream = routes[requestUrl.hostname]
+    if (!handler.upstream) {
+      throw new Error(`未找到 ${handler.url.hostname} 对应的 upstream 配置项`)
+    }
+    handler.url = transformUrl(requestUrl, handler.upstream === DOCKER_HUB)
+    handler.method = request.method;
+    handler.headers = new Headers(request.headers);
+    handler.headers.delete('host')
+    handler.body = await resolveRequestBody(request);
+    logHttp('收到请求', request)
+    logBlockEnd()
+    return handler
   }
 
-  start() {
-    if (this.url.pathname === AUTHORIZE_PATH) {
-      return this.authorize()
-    }
-    // 处理默认的 library 命名空间
-    // Example: /v2/busybox/manifests/latest => /v2/library/busybox/manifests/latest
-    if (this.isDockerHub) {
-      const pathParts = url.pathname.split("/");
-      if (pathParts.length == 5) {
-        pathParts.splice(2, 0, "library");
-        const redirectUrl = new URL(url);
-        redirectUrl.pathname = pathParts.join("/");
-        return Response.redirect(redirectUrl, 301);
-      }
+  route() {
+    if (isAuthRequest(this.url)) {
+      return this.forwardAuthRequest()
     }
     // 代理原始请求
-    return this.forwardRequest()
+    return this.forwardGenericalRequest()
   }
 
-  async forwardRequest() {
-    const newUrl = new URL(this.upstream + this.url.pathname);
-    const newReq = new Request(newUrl, {
-      method: this.request.method,
-      headers: this.request.headers,
+  async forwardGenericalRequest() {
+    logBlockStart('forwardGenericalRequest')
+    const forwardUrl = new URL(this.upstream + this.url.pathname + this.url.search + this.url.hash);
+    const forwardReq = new Request(forwardUrl, {
+      method: this.method,
+      headers: this.headers,
+      body: this.body,
       redirect: "follow",
-    });
-    const resp = await fetch(newReq);
-    if (resp.status === 401) {
-      const newResp = new Response(resp.body, resp);
-      newResp.headers.set(
-        "Www-Authenticate",
-        `Bearer realm="${this.url.protocol}//${this.url.host}${AUTHORIZE_PATH}",service="cloudflare-docker-proxy"`
-      );
-      return newResp;
-    }
-    return resp;
-  }
-
-  async authorize() {
-    const authorization = this.request.headers.get("Authorization");
-    const newUrl = new URL(this.upstream + "/v2/");
-    const resp = await fetch(newUrl, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        Authorization: authorization
+    })
+    let forwardRes = await fetch(forwardReq);
+    // 让客户端根据 Www-Authenticate 头部重新请求
+    if (forwardRes.status === 401) {
+      const wwwAuthenticate = parseAuthenticate(forwardRes.headers.get("Www-Authenticate"));
+      if (wwwAuthenticate) {
+        const realmUrl = new URL(this.url);
+        setForwardRealm(realmUrl, wwwAuthenticate.realm)
+        const realmRes = new Response(forwardRes.body, forwardRes);
+        realmRes.headers.delete('content-length')
+        realmRes.headers.set(
+          "Www-Authenticate", `Bearer realm="${realmUrl.toString()}",service="${wwwAuthenticate.service}"`
+        );
+        forwardRes = realmRes;
       }
-    });
-    if (resp.status !== 401) {
-      return resp;
     }
-    const authenticateStr = resp.headers.get("WWW-Authenticate");
-    if (authenticateStr === null) {
-      return resp;
-    }
-    const wwwAuthenticate = parseAuthenticate(authenticateStr);
-    const scope = this.url.searchParams.get("scope");
-    // autocomplete repo part into scope for DockerHub library images
-    // Example: repository:busybox:pull => repository:library/busybox:pull
-    return fetchToken(wwwAuthenticate, scope, authorization);
+    const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
+    await logHttp('执行常规请求', forwardReq, forwardRes1)
+    logBlockEnd()
+    return forwardRes2;
+  }
+
+  async forwardAuthRequest() {
+    logBlockStart('forwardAuthRequest')
+    const forwardRealm = getForwardRealm(this.url)
+    const forwardUrl = new URL(forwardRealm);
+    forwardUrl.search = this.url.search;
+    const forwardReq = new Request(forwardUrl,
+      {
+        method: this.method,
+        headers: this.headers,
+        body: this.body
+      })
+    const forwardRes = await fetch(forwardReq);
+    const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
+    await logHttp('执行授权请求', forwardReq, forwardRes1)
+    logBlockEnd()
+    return forwardRes2;
   }
 }
 
-function getUpstream(host) {
-  if (host in routes) {
-    return routes[host];
+/**
+ * 处理默认的 library 命名空间
+ * Example: /v2/busybox/manifests/latest => /v2/library/busybox/manifests/latest
+ * 
+ * @param {URL} url 
+ * @param {boolean} isDockerHub
+ * @returns {URL} 
+ */
+function transformUrl(url, isDockerHub) {
+  if (!isDockerHub) {
+    return url
   }
-  if (MODE == "debug") {
-    return TARGET_UPSTREAM;
+  const transformedUrl = new URL(url);
+  const pathParts = url.pathname.split("/");
+  if (pathParts.length == 5) {
+    pathParts.splice(2, 0, "library");
+    transformedUrl.pathname = pathParts.join("/");
   }
-  return "";
+  return transformedUrl
+}
+
+/**
+ * 解析 request body 值
+ * @param {Request} request 
+ */
+async function resolveRequestBody(request) {
+  const method = request.method.toUpperCase();
+  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
+    return await request.arrayBuffer()
+  }
+  return null
 }
 
 function parseAuthenticate(authenticateStr) {
@@ -126,18 +183,17 @@ function parseAuthenticate(authenticateStr) {
   };
 }
 
-async function fetchToken(wwwAuthenticate, scope, authorization) {
-  const url = new URL(wwwAuthenticate.realm);
-  if (wwwAuthenticate.service.length) {
-    url.searchParams.set("service", wwwAuthenticate.service);
-  }
-  if (scope) {
-    url.searchParams.set("scope", scope);
-  }
-  headers = new Headers();
-  if (authorization) {
-    headers.set("Authorization", authorization);
-  }
-  return await fetch(url, { method: "GET", headers: headers });
+function isAuthRequest(url) {
+  return url.pathname.startsWith(AUTHORIZE_PATH)
+}
+
+function setForwardRealm(url, realm) {
+  const base64Realm = encodeBase64(realm)
+  url.pathname = `${AUTHORIZE_PATH}${base64Realm}`
+}
+
+function getForwardRealm(url) {
+  const base64Realm = url.pathname.split(AUTHORIZE_PATH).pop()
+  return decodeBase64(base64Realm)
 }
 
