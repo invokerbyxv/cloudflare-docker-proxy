@@ -1,220 +1,163 @@
-import { decodeBase64, encodeBase64 } from "./base64"
-import { copyResponse } from "./http"
-import { logBlockEnd, logBlockStart, logHttp, } from "./logger"
-
 addEventListener("fetch", (event) => {
-  event.passThroughOnException()
-  event.respondWith(handleRequest(event.request))
-})
-
-const TOP_DOMAIN = "eastcoal.tech"
-
-const DOCKER_HUB = "https://registry-1.docker.io"
-
-const routes = {
-  ["docker." + TOP_DOMAIN]: DOCKER_HUB,
-  ["quay." + TOP_DOMAIN]: "https://quay.io",
-  ["gcr." + TOP_DOMAIN]: "https://gcr.io",
-  ["k8s-gcr." + TOP_DOMAIN]: "https://k8s.gcr.io",
-  ["k8s." + TOP_DOMAIN]: "https://registry.k8s.io",
-  ["ghcr." + TOP_DOMAIN]: "https://ghcr.io",
-  ["cloudsmith." + TOP_DOMAIN]: "https://docker.cloudsmith.io",
-}
-
-async function handleRequest(request) {
-
-  const handler = await RequestHandler.create(request)
-  return handler.route()
-}
-
-// 末尾的 / 不能省略，否则 getForwardRealm 会出错
-const AUTHORIZE_PATH = "/auth/"
-
-class RequestHandler {
-  /**
-   * @type {string}
-   */
-  upstream
-
-  /**
-   * @type {URL}
-   */
-  url
-
-  /**
-   * @type {string}
-   */
-  method
-
-  /**
-   * @type {Headers}
-   */
-  headers
-
-  /**
-   * @type {ArrayBuffer}
-   */
-  body
-
-  constructor() {
-  }
-
-  /**
-   * @param {Request} request
-   */
-  static async create(request) {
-    const handler = new RequestHandler()
-    logBlockStart('RequestHandler block')
-    handler.upstream = resolveUpstream(request)
-    handler.url = resolveUrl(request, handler.upstream === DOCKER_HUB)
-    handler.headers = resolveRequestHeaders(request, handler)
-    handler.body = await resolveRequestBody(request)
-    handler.method = request.method
-    logHttp('收到请求', request)
-    logBlockEnd()
-    return handler
-  }
-
-  route() {
-    if (isAuthRequest(this.url)) {
-      return this.forwardAuthRequest()
+    event.passThroughOnException();
+    event.respondWith(handleRequest(event.request));
+  });
+  const CUSTOM_DOMAIN = 'eastcoal.tech';
+  const dockerHub = "https://registry-1.docker.io";
+  
+  const routes = {
+    // production
+    ["docker." + CUSTOM_DOMAIN]: dockerHub,
+    ["quay." + CUSTOM_DOMAIN]: "https://quay.io",
+    ["gcr." + CUSTOM_DOMAIN]: "https://gcr.io",
+    ["k8s-gcr." + CUSTOM_DOMAIN]: "https://k8s.gcr.io",
+    ["k8s." + CUSTOM_DOMAIN]: "https://registry.k8s.io",
+    ["ghcr." + CUSTOM_DOMAIN]: "https://ghcr.io",
+    ["cloudsmith." + CUSTOM_DOMAIN]: "https://docker.cloudsmith.io",
+    ["ecr." + CUSTOM_DOMAIN]: "https://public.ecr.aws",
+  
+    // staging
+    ["docker-staging." + CUSTOM_DOMAIN]: dockerHub,
+  };
+  
+  function routeByHosts(host) {
+    if (host in routes) {
+      return routes[host];
     }
-    // 代理原始请求
-    return this.forwardGenericalRequest()
+    return "";
   }
-
-  async forwardGenericalRequest() {
-    logBlockStart('forwardGenericalRequest')
-    const forwardUrl = new URL(this.upstream + this.url.pathname + this.url.search + this.url.hash)
-    const forwardReq = new Request(forwardUrl, {
-      method: this.method,
-      headers: this.headers,
-      body: this.body,
-      redirect: "manual",
-    })
-    let forwardRes = await fetch(forwardReq)
-    // 让客户端根据 Www-Authenticate 头部重新请求
-    if (forwardRes.status === 401) {
-      const wwwAuthenticate = parseAuthenticate(forwardRes.headers.get("Www-Authenticate"))
-      if (wwwAuthenticate) {
-        const realmUrl = new URL(this.url)
-        setForwardRealm(realmUrl, wwwAuthenticate.realm)
-        const realmRes = new Response(forwardRes.body, forwardRes)
-        realmRes.headers.delete('content-length')
-        realmRes.headers.set(
-          "Www-Authenticate", `Bearer realm="${realmUrl.toString()}",service="${wwwAuthenticate.service}"`
-        )
-        forwardRes = realmRes
+  
+  async function handleRequest(request) {
+    const url = new URL(request.url);
+    const upstream = routeByHosts(url.hostname);
+    if (upstream === "") {
+      return new Response(
+        JSON.stringify({
+          routes: routes,
+        }),
+        {
+          status: 404,
+        }
+      );
+    }
+    const isDockerHub = upstream == dockerHub;
+    const authorization = request.headers.get("Authorization");
+    if (url.pathname == "/v2/") {
+      const newUrl = new URL(upstream + "/v2/");
+      const headers = new Headers();
+      if (authorization) {
+        headers.set("Authorization", authorization);
+      }
+      // check if need to authenticate
+      const resp = await fetch(newUrl.toString(), {
+        method: "GET",
+        headers: headers,
+        redirect: "follow",
+      });
+      if (resp.status === 401) {
+        return responseUnauthorized(url);
+      }
+      return resp;
+    }
+    // get token
+    if (url.pathname == "/v2/auth") {
+      const newUrl = new URL(upstream + "/v2/");
+      const resp = await fetch(newUrl.toString(), {
+        method: "GET",
+        redirect: "follow",
+      });
+      if (resp.status !== 401) {
+        return resp;
+      }
+      const authenticateStr = resp.headers.get("WWW-Authenticate");
+      if (authenticateStr === null) {
+        return resp;
+      }
+      const wwwAuthenticate = parseAuthenticate(authenticateStr);
+      let scope = url.searchParams.get("scope");
+      // autocomplete repo part into scope for DockerHub library images
+      // Example: repository:busybox:pull => repository:library/busybox:pull
+      if (scope && isDockerHub) {
+        let scopeParts = scope.split(":");
+        if (scopeParts.length == 3 && !scopeParts[1].includes("/")) {
+          scopeParts[1] = "library/" + scopeParts[1];
+          scope = scopeParts.join(":");
+        }
+      }
+      return await fetchToken(wwwAuthenticate, scope, authorization);
+    }
+    // redirect for DockerHub library images
+    // Example: /v2/busybox/manifests/latest => /v2/library/busybox/manifests/latest
+    if (isDockerHub) {
+      const pathParts = url.pathname.split("/");
+      if (pathParts.length == 5) {
+        pathParts.splice(2, 0, "library");
+        const redirectUrl = new URL(url);
+        redirectUrl.pathname = pathParts.join("/");
+        return Response.redirect(redirectUrl, 301);
       }
     }
-    const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
-    await logHttp('执行常规请求', forwardReq, forwardRes1)
-    logBlockEnd()
-    return forwardRes2
-  }
-
-  async forwardAuthRequest() {
-    logBlockStart('forwardAuthRequest')
-    const forwardRealm = getForwardRealm(this.url)
-    const forwardUrl = new URL(forwardRealm)
-    forwardUrl.search = this.url.search
-    const forwardReq = new Request(forwardUrl,
-      {
-        method: this.method,
-        headers: this.headers,
-        body: this.body
-      })
-    const forwardRes = await fetch(forwardReq)
-    const [forwardRes1, forwardRes2] = copyResponse(forwardRes)
-    await logHttp('执行授权请求', forwardReq, forwardRes1)
-    logBlockEnd()
-    return forwardRes2
-  }
-}
-
-/**
- * 解析上游请求地址
- * 
- * @param {Request} request 
- */
-function resolveUpstream(request) {
-  const requestUrl = new URL(request.url)
-  const upstream = routes[requestUrl.hostname]
-  if (!upstream) {
-    throw new Error(`未找到 ${requestUrl.hostname} 对应的 upstream 配置项`)
-  }
-  return upstream
-}
-
-/**
- * 处理默认的 library 命名空间
- * Example: /v2/busybox/manifests/latest => /v2/library/busybox/manifests/latest
- * 
- * @param {Request} request 
- * @param {boolean} isDockerHub
- * @returns {URL} 
- */
-function resolveUrl(request, isDockerHub) {
-  const transformedUrl = new URL(request.url)
-  if (isDockerHub) {
-    const pathParts = transformedUrl.pathname.split("/")
-    if (pathParts.length == 5) {
-      pathParts.splice(2, 0, "library")
-      transformedUrl.pathname = pathParts.join("/")
+    // foward requests
+    const newUrl = new URL(upstream + url.pathname);
+    const newReq = new Request(newUrl, {
+      method: request.method,
+      headers: request.headers,
+      // don't follow redirect to dockerhub blob upstream
+      redirect: isDockerHub ? "manual" : "follow",
+    });
+    const resp = await fetch(newReq);
+    if (resp.status == 401) {
+      return responseUnauthorized(url);
     }
+    // handle dockerhub blob redirect manually
+    if (isDockerHub && resp.status == 307) {
+      const location = new URL(resp.headers.get("Location"));
+      const redirectResp = await fetch(location.toString(), {
+        method: "GET",
+        redirect: "follow",
+      });
+      return redirectResp;
+    }
+    return resp;
   }
-  return transformedUrl
-}
-
-/**
- * 解析 request headers 值
- * @param {Request} request 
- * @param {RequestHandler} handler
- */
-function resolveRequestHeaders(request, handler) {
-  const url = new URL(handler.upstream)
-  const headers = new Headers(request.headers)
-  headers.set('Host', url.hostname)
-  return headers
-}
-
-/**
- * 解析 request body 值
- * @param {Request} request 
- */
-async function resolveRequestBody(request) {
-  const method = request.method.toUpperCase()
-  if (method === 'POST' || method === 'PUT' || method === 'PATCH') {
-    return await request.arrayBuffer()
+  
+  function parseAuthenticate(authenticateStr) {
+    // sample: Bearer realm="https://auth.ipv6.docker.com/token",service="registry.docker.io"
+    // match strings after =" and before "
+    const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g;
+    const matches = authenticateStr.match(re);
+    if (matches == null || matches.length < 2) {
+      throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`);
+    }
+    return {
+      realm: matches[0],
+      service: matches[1],
+    };
   }
-  return null
-}
-
-function parseAuthenticate(authenticateStr) {
-  // sample: Bearer realm="https://auth.ipv6.docker.com/token",service="registry.docker.io"
-  // match strings after =" and before "
-  const re = /(?<=\=")(?:\\.|[^"\\])*(?=")/g
-  const matches = authenticateStr.match(re)
-  if (matches == null || matches.length < 2) {
-    throw new Error(`invalid Www-Authenticate Header: ${authenticateStr}`)
+  
+  async function fetchToken(wwwAuthenticate, scope, authorization) {
+    const url = new URL(wwwAuthenticate.realm);
+    if (wwwAuthenticate.service.length) {
+      url.searchParams.set("service", wwwAuthenticate.service);
+    }
+    if (scope) {
+      url.searchParams.set("scope", scope);
+    }
+    const headers = new Headers();
+    if (authorization) {
+      headers.set("Authorization", authorization);
+    }
+    return await fetch(url, { method: "GET", headers: headers });
   }
-  return {
-    realm: matches[0],
-    service: matches[1],
+  
+  function responseUnauthorized(url) {
+    const headers = new(Headers);
+    headers.set(
+        "Www-Authenticate",
+        `Bearer realm="https://${url.hostname}/v2/auth",service="cloudflare-docker-proxy"`
+      );
+    return new Response(JSON.stringify({ message: "UNAUTHORIZED" }), {
+      status: 401,
+      headers: headers,
+    });
   }
-}
-
-function isAuthRequest(url) {
-  return url.pathname.startsWith(AUTHORIZE_PATH)
-}
-
-function setForwardRealm(url, realm) {
-  const base64Realm = encodeBase64(realm)
-  url.pathname = `${AUTHORIZE_PATH}${base64Realm}`
-}
-
-function getForwardRealm(url) {
-  const base64Realm = url.pathname.split(AUTHORIZE_PATH).pop()
-  return decodeBase64(base64Realm)
-}
-
