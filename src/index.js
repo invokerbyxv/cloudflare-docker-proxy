@@ -90,7 +90,7 @@ class RequestHandler {
       method: this.method,
       headers: this.headers,
       body: this.body,
-      redirect: "follow",
+      redirect: "manual",
     })
     let forwardRes = await fetch(forwardReq)
     // 让客户端根据 Www-Authenticate 头部重新请求
