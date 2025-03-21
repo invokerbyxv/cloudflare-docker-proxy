@@ -2,7 +2,7 @@ addEventListener("fetch", (event) => {
     event.passThroughOnException();
     event.respondWith(handleRequest(event.request));
   });
-  const CUSTOM_DOMAIN = 'eastcoal.tech';
+  const CUSTOM_DOMAIN = 'tarasha.work';
   const dockerHub = "https://registry-1.docker.io";
   
   const routes = {
